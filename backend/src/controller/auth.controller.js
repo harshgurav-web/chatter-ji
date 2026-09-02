@@ -1,34 +1,36 @@
 const userModel = require("../models/user.model");
-const bcrypt = require("bcryptjs");
-const { sendWelcomeEmail } = require("../services/register.email");
-const jwt = require("jsonwebtoken")
-const crypto = require("crypto")
+const jwt = require("jsonwebtoken");
+const crypto = require("crypto");
 const uploadFile = require("../services/imagekit");
 
-
-
-
 async function register(req, res) {
-
     try {
-
         const { fullname, email, password } = req.body;
 
         if (!fullname || !email || !password) {
-            return res.status(400).json({ message: "All fields are required" });
+            return res.status(400).json({
+                message: "All fields are required"
+            });
         }
 
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
         if (!emailRegex.test(email)) {
-            return res.status(400).json({ message: "Invalid email address" });
+            return res.status(400).json({
+                message: "Invalid email address"
+            });
         }
 
         if (fullname.length < 3) {
-            return res.status(400).json({ message: "Fullname must be at least 3 characters long" });
+            return res.status(400).json({
+                message: "Fullname must be at least 3 characters long"
+            });
         }
 
         if (password.length < 6) {
-            return res.status(400).json({ message: "Password must be at least 6 characters long" });
+            return res.status(400).json({
+                message: "Password must be at least 6 characters long"
+            });
         }
 
         const existingUser = await userModel.findOne({
@@ -39,7 +41,9 @@ async function register(req, res) {
         });
 
         if (existingUser) {
-            return res.status(400).json({ message: "User already exists" });
+            return res.status(400).json({
+                message: "User already exists"
+            });
         }
 
         const newUser = await userModel.create({
@@ -49,32 +53,41 @@ async function register(req, res) {
             profilePicture: ""
         });
 
-        if (newUser) {
+        const sessionId = crypto.randomUUID();
 
+        const token = jwt.sign(
+            {
+                userid: newUser._id,
+                sessionId
+            },
+            process.env.JWT_SECRET,
+            {
+                expiresIn: "2d"
+            }
+        );
 
-            const token = jwt.sign({ userid: newUser._id }, process.env.JWT_SECRET, { expiresIn: "2d" })
-            res.cookie("token", token)
+        newUser.activeSessionId = sessionId;
+        await newUser.save();
 
-            return res.status(201).json({ message: "User created successfully", user: newUser });
-        }
+        res.cookie("token", token, {
+            httpOnly: true,
+            secure: true,
+            sameSite: "none"
+        });
 
-        // "token" → cookie name
-        // token → JWT/token value
-        // httpOnly: true → JavaScript in the browser cannot access the cookie
-        // secure: false → allows HTTP during local development
-
-        // For production HTTPS:
-        // secure: true
+        return res.status(201).json({
+            message: "User created successfully",
+            user: newUser
+        });
 
     } catch (error) {
-        console.log("Error in register", error);
-        return res.status(500).json({ message: "Internal server error" });
+        console.error("Error in register:", error);
+
+        return res.status(500).json({
+            message: "Internal server error"
+        });
     }
 }
-
-
-
-
 
 
 async function loginUser(req, res) {
@@ -83,7 +96,7 @@ async function loginUser(req, res) {
     try {
         const isUserExist = await userModel
             .findOne({ email })
-            .select("+password");
+            .select("+password +activeSessionId");
 
         if (!isUserExist) {
             return res.status(401).json({
@@ -113,11 +126,14 @@ async function loginUser(req, res) {
             }
         );
 
-        res.cookie("token", token);
-
         isUserExist.activeSessionId = sessionId;
-
         await isUserExist.save();
+
+        res.cookie("token", token, {
+            httpOnly: true,
+            secure: true,
+            sameSite: "none"
+        });
 
         return res.status(200).json({
             message: "user logged in successfully",
@@ -133,19 +149,31 @@ async function loginUser(req, res) {
     }
 }
 
+
 async function logOut(req, res) {
-req.user.activeSessionId = null;
-await req.user.save();
+    try {
+        req.user.activeSessionId = null;
 
-res.clearCookie('token');
+        await req.user.save();
 
-res.status(200).json({
-    message: "user logout successfully"
-})
+        res.clearCookie("token", {
+            httpOnly: true,
+            secure: true,
+            sameSite: "none"
+        });
+
+        return res.status(200).json({
+            message: "user logout successfully"
+        });
+
+    } catch (error) {
+        console.error("Error in logout:", error);
+
+        return res.status(500).json({
+            message: "Internal server error"
+        });
+    }
 }
-
-
-
 
 
 async function updateProfile(req, res) {
@@ -185,5 +213,9 @@ async function updateProfile(req, res) {
 }
 
 
-
-module.exports = { register,loginUser, logOut,updateProfile}
+module.exports = {
+    register,
+    loginUser,
+    logOut,
+    updateProfile
+};

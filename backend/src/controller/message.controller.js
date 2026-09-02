@@ -1,6 +1,9 @@
 const uploadFile = require("../services/imagekit.js");
 
-const { getReceiverSocketId, io } = require("../services/socket");
+const {
+    getReceiverSocketId,
+    getIO
+} = require("../services/socket");
 
 const Message = require("../models/message.model.js");
 const User = require("../models/user.model.js");
@@ -17,7 +20,7 @@ async function getAllContacts(req, res) {
         return res.status(200).json(filteredUsers);
 
     } catch (error) {
-        console.log("Error in getAllContacts:", error);
+        console.error("Error in getAllContacts:", error);
 
         return res.status(500).json({
             message: "Server error"
@@ -29,6 +32,7 @@ async function getAllContacts(req, res) {
 async function getMessagesByUserId(req, res) {
     try {
         const myId = req.user._id;
+
         const { id: userToChatId } = req.params;
 
         const messages = await Message.find({
@@ -42,13 +46,13 @@ async function getMessagesByUserId(req, res) {
                     receiverId: myId
                 }
             ]
-        });
+        }).sort({ createdAt: 1 });
 
         return res.status(200).json(messages);
 
     } catch (error) {
-        console.log(
-            "Error in getMessages controller:",
+        console.error(
+            "Error in getMessagesByUserId:",
             error.message
         );
 
@@ -62,19 +66,23 @@ async function getMessagesByUserId(req, res) {
 async function sendMessage(req, res) {
     try {
         const { text } = req.body;
+
         const { id: receiverId } = req.params;
 
         const senderId = req.user._id;
-        console.log("senderId", senderId);
-        // Check whether text or image was provided
-        if (!text && !req.file) {
+
+        console.log("senderId:", senderId);
+        console.log("receiverId:", receiverId);
+
+        // Text or image is required
+        if (!text?.trim() && !req.file) {
             return res.status(400).json({
                 message: "Text or image is required."
             });
         }
 
         // Prevent sending message to yourself
-        if (senderId.equals(receiverId)) {
+        if (senderId.toString() === receiverId.toString()) {
             return res.status(400).json({
                 message: "Cannot send messages to yourself."
             });
@@ -107,16 +115,19 @@ async function sendMessage(req, res) {
         const newMessage = new Message({
             senderId,
             receiverId,
-            text: text || "",
+            text: text?.trim() || "",
             image: imageUrl
         });
 
         await newMessage.save();
 
-        // Send real-time message through Socket.IO
-        const receiverSocketId = getReceiverSocketId(receiverId);
+        // Send real-time message
+        const receiverSocketId =
+            getReceiverSocketId(receiverId);
 
         if (receiverSocketId) {
+            const io = getIO();
+
             io.to(receiverSocketId).emit(
                 "newMessage",
                 newMessage
@@ -126,8 +137,8 @@ async function sendMessage(req, res) {
         return res.status(201).json(newMessage);
 
     } catch (error) {
-        console.log(
-            "Error in sendMessage controller:",
+        console.error(
+            "Error in sendMessage:",
             error.message
         );
 
@@ -145,25 +156,35 @@ async function getChatPartners(req, res) {
         // Find all messages involving logged-in user
         const messages = await Message.find({
             $or: [
-                { senderId: loggedInUserId },
-                { receiverId: loggedInUserId }
+                {
+                    senderId: loggedInUserId
+                },
+                {
+                    receiverId: loggedInUserId
+                }
             ]
         });
 
         // Extract unique chat partner IDs
         const chatPartnerIds = [
             ...new Set(
-                messages.map((msg) =>
-                    msg.senderId.toString() ===
-                    loggedInUserId.toString()
-                        ? msg.receiverId.toString()
-                        : msg.senderId.toString()
-                )
+                messages.map((msg) => {
+                    if (
+                        msg.senderId.toString() ===
+                        loggedInUserId.toString()
+                    ) {
+                        return msg.receiverId.toString();
+                    }
+
+                    return msg.senderId.toString();
+                })
             )
         ];
 
         const chatPartners = await User.find({
-            _id: { $in: chatPartnerIds }
+            _id: {
+                $in: chatPartnerIds
+            }
         }).select("-password");
 
         return res.status(200).json(chatPartners);
